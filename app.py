@@ -2,7 +2,7 @@ import os, json, uuid, secrets, hashlib, hmac, base64
 from datetime import datetime,timezone
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, Depends
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine,Column,String,Integer,DateTime,Text,Boolean,ForeignKey
 from sqlalchemy.orm import declarative_base,sessionmaker
@@ -60,6 +60,16 @@ class Credential(Base):
  secret=Column(Text)
 Base.metadata.create_all(engine)
 app=FastAPI(title='Studio API')
+
+@app.middleware('http')
+async def stage_guard(request: Request, call_next):
+    # A private ChatGPT plugin does not make its Render HTTPS host private.
+    # For the connectivity test, disable all account, docs, and write APIs.
+    if os.getenv('STUDIO_SMOKE_ONLY') == '1':
+        if request.url.path.startswith('/api/') or request.url.path in ('/openapi.json', '/docs', '/redoc'):
+            return JSONResponse({'detail': 'Studio staging exposes MCP connectivity only'}, status_code=403)
+    return await call_next(request)
+
 @app.get('/health')
 def health():return {'status':'ok'}
 def hash_pw(s):
@@ -183,4 +193,7 @@ async def channels(id=Depends(auth)):
   resp=await client.get(url+'/public/v1/integrations',headers={'Authorization':key})
   resp.raise_for_status();return resp.json()
 @app.get('/')
-def home():return HTMLResponse(Path('index.html').read_text())
+def home():
+    if os.getenv('STUDIO_SMOKE_ONLY') == '1':
+        return HTMLResponse('<html><head><title>Studio MCP test</title></head><body style="font:16px system-ui;max-width:680px;margin:10vh auto;padding:24px"><h1>Studio MCP staging</h1><p>This is a connectivity-only test. Account APIs, video generation, and Postiz publishing are disabled.</p><p>Health: <a href="/health">/health</a></p></body></html>')
+    return HTMLResponse(Path('index.html').read_text())
