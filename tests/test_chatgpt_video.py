@@ -66,7 +66,8 @@ def test_chatgpt_directed_video_with_signed_preview(monkeypatch):
         raise AssertionError("Unsupported layouts should not be silently ignored")
 
 
-def test_signup_without_invitation():
+def test_signup_without_invitation(monkeypatch):
+    monkeypatch.setenv("STUDIO_SMOKE_ONLY", "0")
     client = TestClient(app)
     response = client.post("/api/auth/register", json={
         "email": "studio-no-invite-test@example.invalid",
@@ -74,3 +75,16 @@ def test_signup_without_invitation():
     })
     assert response.status_code == 200, response.text
     assert response.json()["token"]
+
+
+
+def test_chatgpt_video_mcp_tool_schema():
+    import asyncio
+    from plugin import mcp
+    tools = asyncio.run(mcp.list_tools())
+    by_name = {tool.name: tool for tool in tools}
+    assert "create_and_render_video" in by_name
+    assert "get_video_generation_status" in by_name
+    schema = by_name["create_and_render_video"].inputSchema
+    assert {"narration", "scenes", "title"}.issubset(schema["properties"])
+    assert {"narration", "scenes", "title"}.issubset(set(schema.get("required", [])))
