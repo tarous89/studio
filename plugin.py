@@ -159,7 +159,7 @@ if not SMOKE:
                     raise ValueError("Scheduled time must be in the future with timezone")
             v.scheduled_for=when
             queue_video(db,v.id,"youtube_publish")
-            v.status="scheduled" if when else "approved"
+            v.status="queued_for_upload"
             db.commit()
             return {"video_id":v.id,"status":"queued_for_youtube","scheduled_for":str(when) if when else None}
 
