@@ -38,11 +38,15 @@ def test_authenticated_video_render_to_preview(monkeypatch):
     assert queued.status_code == 200, queued.text
     assert queued.json()["status"] == "queued"
 
-    assert one_job(), "Background worker did not find the queued render job"
-
-    records = client.get("/api/videos", headers=headers)
-    assert records.status_code == 200, records.text
-    video = next(v for v in records.json() if v["id"] == video_id)
+    # Another integration test can have its own render queued, so check
+    # this video specifically instead of assuming the first job belongs to us.
+    for _ in range(12):
+        records = client.get("/api/videos", headers=headers)
+        assert records.status_code == 200, records.text
+        video = next(v for v in records.json() if v["id"] == video_id)
+        if video["status"] == "ready":
+            break
+        assert one_job(), "No queued render job found"
     assert video["status"] == "ready", video
 
     preview = client.get("/api/videos/" + video_id + "/media", headers=headers)
