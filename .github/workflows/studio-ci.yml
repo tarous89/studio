@@ -1,0 +1,33 @@
+name: Studio checks
+on:
+  push:
+    branches: [main, feat/studio-foundation]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest
+      - name: Python syntax
+        run: python -m compileall -q app.py plugin.py studio_pipeline.py studio_routes.py studio_oauth.py run.py
+      - name: JavaScript syntax
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          content=Path('index.html').read_text()
+          js=content.rsplit('<script>',1)[1].split('</script>',1)[0]
+          Path('/tmp/studio-app.js').write_text(js)
+          PY
+          node --check /tmp/studio-app.js
+      - name: API, registration and MP4 renderer tests
+        run: python -m pytest -q
