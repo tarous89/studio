@@ -162,16 +162,11 @@ def jobs(video_id:str,user_id=Depends(auth)):
 
 @router.post("/campaigns/{campaign_id}/run")
 def run_campaign(campaign_id:str,user_id=Depends(auth)):
+    """A scriptless campaign cannot render: ChatGPT must author the story first."""
     with Session() as db:
         c=db.query(Campaign).filter_by(id=campaign_id,user_id=user_id).first()
         if not c:raise HTTPException(404,"Campaign not found")
-        v=Video(user_id=user_id,campaign_id=c.id,style=c.style,length=c.length,
-                title=c.topic[:100] or c.name,script=draft_script(c.name,c.audience,c.topic),
-                channels=c.channels,status="queued")
-        db.add(v);db.flush()
-        queue_video(db,v.id,"render")
-        db.commit()
-        return {"id":v.id,"status":"queued"}
+    raise HTTPException(409,"Create this campaign video in ChatGPT using the Studio plugin. ChatGPT supplies the narration and scenes to run_campaign_now.")
 
 
 def mount(app):
