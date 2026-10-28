@@ -3,7 +3,8 @@
 # and managing the SAME existing studio-web / studio-db resources.
 databases:
   - name: studio-db
-    databaseName: studio
+    databaseName: studio_db_6aek
+    user: studio_db_6aek_user
     region: frankfurt
     plan: basic-256mb
 services:
