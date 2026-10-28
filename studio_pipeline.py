@@ -159,6 +159,8 @@ def create_chatgpt_video(db, user_id, title, narration, scenes, style="duotone",
 
 
 def get_creative_plan(video_id):
+    if not video_id:
+        return None
     with Session() as db:
         plan = db.get(VideoCreativePlan, video_id)
         if not plan:
