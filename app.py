@@ -181,7 +181,7 @@ def schedule(vid:str,data:ScheduleData,id=Depends(auth)):
   from studio_pipeline import VideoAsset,queue_video,youtube_connected
   if v.status!='approved' or not db.get(VideoAsset,v.id):raise HTTPException(409,'Approve a rendered MP4 first')
   if not youtube_connected(db,id):raise HTTPException(422,'Connect YouTube before scheduling')
-  v.scheduled_for=data.scheduled_for;v.status='scheduled';queue_video(db,v.id,'youtube_publish');db.commit();return video_data(v)
+  v.scheduled_for=data.scheduled_for;v.status='queued_for_upload';queue_video(db,v.id,'youtube_publish');db.commit();return video_data(v)
 @app.get('/api/stats')
 def stats(id=Depends(auth)):
  with Session() as db:
