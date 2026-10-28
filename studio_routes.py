@@ -138,7 +138,7 @@ def publish_video(video_id:str,data:PublicationRequest,user_id=Depends(auth)):
             if data.publish_at.astimezone(timezone.utc)<=now():
                 raise HTTPException(400,"Scheduled publication time must be in the future")
         v.scheduled_for=data.publish_at
-        v.status="scheduled" if data.publish_at else "approved"
+        v.status="queued_for_upload"
         queue_video(db,v.id,"youtube_publish")
         db.commit()
         return {"id":v.id,"status":"queued_for_youtube","publish_at":data.publish_at}
