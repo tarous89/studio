@@ -10,6 +10,15 @@ from run import app
 from studio_pipeline import one_job
 
 def test_authenticated_video_render_to_preview(monkeypatch):
+    # Self-contained CI: synthesize a short local fixture instead of calling remote TTS.
+    import studio_pipeline
+    import subprocess
+    def synthesize_for_test(script, output):
+        subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                        "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+                        "-c:a", "libmp3lame", str(output)], check=True)
+        return "test-tone"
+    monkeypatch.setattr(studio_pipeline, "_synthesize_narration", synthesize_for_test)
     monkeypatch.setenv("STUDIO_SMOKE_ONLY", "0")
     monkeypatch.setenv("STUDIO_SIGNUP_CODE", "studio-ci-private-code")
     assert shutil.which("ffmpeg"), "ffmpeg must be installed to test real MP4 rendering"
