@@ -426,8 +426,83 @@ def _segments(video):
     return parts
 
 
+def _synthesize_narration(script, output):
+    """Generate a human-sounding neural voice; never silently use eSpeak.
+
+    Prefer OpenAI speech synthesis when an API key is present. Edge Neural TTS
+    provides a natural-voice option without requiring Studio's own API key.
+    """
+    errors = []
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if api_key:
+        try:
+            with httpx.Client(timeout=100) as client:
+                response = client.post(
+                    "https://api.openai.com/v1/audio/speech",
+                    headers={"Authorization": "Bearer " + api_key},
+                    json={
+                        "model": os.getenv("STUDIO_TTS_MODEL", "gpt-4o-mini-tts"),
+                        "voice": os.getenv("STUDIO_TTS_VOICE", "marin"),
+                        "input": script,
+                        "instructions": (
+                            "Speak like a thoughtful, warm, articulate human explaining "
+                            "science to a friend. Natural pauses, varied emphasis, and "
+                            "comfortable pacing. Avoid robotic cadence, sales energy, "
+                            "or exaggerated announcer intonation."
+                        ),
+                        "response_format": "mp3",
+                    },
+                )
+                response.raise_for_status()
+                if len(response.content) < 1024:
+                    raise RuntimeError("Empty speech response")
+                output.write_bytes(response.content)
+                return "openai"
+        except Exception as exc:
+            errors.append("OpenAI speech: " + str(exc)[:180])
+
+    if shutil.which("edge-tts"):
+        try:
+            voice = os.getenv("STUDIO_EDGE_VOICE", "en-US-JennyNeural")
+            subprocess.run(
+                ["edge-tts", "--voice", voice, "--text", script,
+                 "--write-media", str(output)],
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                timeout=100,
+            )
+            if not output.exists() or output.stat().st_size < 1024:
+                raise RuntimeError("Empty neural speech file")
+            return "edge-neural"
+        except Exception as exc:
+            errors.append("Edge Neural speech: " + str(exc)[:180])
+
+    raise RuntimeError(
+        "Natural narration is unavailable. Set OPENAI_API_KEY or check the "
+        "Edge Neural TTS network connection. The robotic eSpeak voice is "
+        "intentionally disabled. " + " | ".join(errors)
+    )
+
+
+def _audio_tempo(audio_path, target_seconds):
+    """Fit narration into the requested duration without cutting off speech."""
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path)],
+        check=True, capture_output=True, text=True, timeout=15,
+    )
+    audio_seconds = float(probe.stdout.strip())
+    available = max(1.0, float(target_seconds) - 0.2)
+    tempo = max(1.0, audio_seconds / available)
+    if tempo > 1.5:
+        raise RuntimeError(
+            "Narration is too long for a natural delivery at the requested "
+            "duration. Shorten the script or increase the duration."
+        )
+    return min(1.5, tempo)
+
+
 def render_video(video):
-    """Create an original, portrait MP4 with paper-like cards and spoken narration."""
+    """Create an original, portrait MP4 with neural spoken narration."""
     seconds = max(10,min(90,int(video.length or 45)))
     plan = get_creative_plan(video.id)
     scenes = plan["scenes"] if plan else [
@@ -447,22 +522,16 @@ def render_video(video):
             for path in paths:
                 f.write(f"file '{path.as_posix()}'\nduration {dur:.3f}\n")
             f.write(f"file '{paths[-1].as_posix()}'\n")
-        narration=Path(folder)/"voice.wav"
+        narration=Path(folder)/"voice.mp3"
         voice_script=video.script or " ".join(scene["text"] for scene in scenes)
-        has_voice=shutil.which("espeak-ng") is not None
-        if has_voice:
-            speech_rate = min(220, max(140, int(len(voice_script.split()) / seconds * 60 * 1.04)))
-            subprocess.run(["espeak-ng","-v","en-us","-s",str(speech_rate),"-w",str(narration),voice_script],
-                           check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=40)
+        _synthesize_narration(voice_script, narration)
+        tempo=_audio_tempo(narration, seconds)
         output=Path(folder)/"video.mp4"
         cmd=["ffmpeg","-hide_banner","-loglevel","error","-nostdin","-y",
-             "-f","concat","-safe","0","-i",str(manifest)]
-        if has_voice:
-            cmd += ["-i",str(narration)]
-        else:
-            cmd += ["-f","lavfi","-i","anullsrc=channel_layout=stereo:sample_rate=44100"]
+             "-f","concat","-safe","0","-i",str(manifest),"-i",str(narration)]
+        audio_filter=(f"atempo={tempo:.4f},apad" if tempo > 1.001 else "apad")
         cmd += ["-vf","fps=18,format=yuv420p","-c:v","libx264","-preset","ultrafast",
-                "-crf","28","-c:a","aac","-b:a","96k","-af","apad",
+                "-crf","28","-c:a","aac","-b:a","96k","-af",audio_filter,
                 "-t",str(seconds),"-movflags","+faststart",str(output)]
         subprocess.run(cmd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=max(150,seconds*8))
         content=output.read_bytes()
