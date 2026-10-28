@@ -30,4 +30,4 @@ jobs:
           PY
           node --check /tmp/studio-app.js
       - name: API, registration and MP4 renderer tests
-        run: pytest -q
+        run: python -m pytest -q
