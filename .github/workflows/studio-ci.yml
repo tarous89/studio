@@ -29,5 +29,9 @@ jobs:
           Path('/tmp/studio-app.js').write_text(js)
           PY
           node --check /tmp/studio-app.js
+      - name: Install system video renderer dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg espeak-ng fonts-dejavu-core
       - name: API, registration and MP4 renderer tests
         run: python -m pytest -q
