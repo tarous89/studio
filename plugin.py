@@ -4,6 +4,8 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from typing import Literal
+from pydantic import BaseModel, Field
 
 from fastapi.responses import JSONResponse
 from mcp.server.auth.middleware.auth_context import get_access_token
@@ -14,7 +16,8 @@ from pydantic import AnyHttpUrl
 from app import Campaign, Session, Video, app, now, video_data, campaign_data
 from studio_oauth import BASE, ISSUER, MCP_RESOURCE, consent_get, consent_post, provider
 from studio_pipeline import (
-    VideoAsset, draft_script, queue_video, tick, youtube_configured, youtube_connected
+    VideoAsset, VideoJob, create_chatgpt_video, create_preview_link, get_creative_plan,
+    queue_video, tick, youtube_configured, youtube_connected
 )
 from studio_routes import mount as mount_api
 
@@ -28,7 +31,7 @@ if SMOKE:
 else:
     mcp = FastMCP(
         "Studio",
-        instructions="Work only with the authenticated user's Studio campaigns, drafts, video render jobs and YouTube publications. A rendering job is not a published video. Publishing requires explicit approval or an explicitly auto-approved campaign. Never invent YouTube URLs.",
+        instructions="ChatGPT is Studio's creative director. Write the complete narration and exact sequence of on-screen scenes yourself, then call create_and_render_video to send that plan to Studio's renderer. Do not call any app-side story generator as a substitute. The renderer supports headline, quote, stat and list layouts with coral, lilac, mint and gold accents. Check get_video_generation_status for an expiring MP4 preview URL. Never claim queued means complete. Upload to YouTube only after approval and an explicit user request, unless an opted-in auto-publishing campaign is already authorized.",
         stateless_http=True,json_response=True,streamable_http_path="/",host="0.0.0.0",
         auth_server_provider=provider,
         auth=AuthSettings(
@@ -58,12 +61,85 @@ def studio_connection_status()->dict:
         "connected":True,
         "mode":"connectivity-only" if SMOKE else "oauth-account-tools",
         "video_renderer":"configured",
+        "storage":"postgres" if os.getenv("DATABASE_URL") else "temporary_sqlite",
+        "creative_direction":"ChatGPT supplies narration, scenes and publishing metadata",
         "youtube_oauth_configured":youtube_configured(),
         "actual_youtube_channel_connected":"check_youtube_connection after login",
     }
 
 
+class SceneInstruction(BaseModel):
+    """A single renderable 9:16 scene authored by ChatGPT."""
+    text: str = Field(min_length=1, max_length=180, description="Exact on-screen wording")
+    layout: Literal["headline", "quote", "stat", "list"] = Field(
+        default="headline", description="Card composition implemented by Studio"
+    )
+    accent: Literal["coral", "lilac", "mint", "gold"] = Field(
+        default="lilac", description="Accent color implemented by Studio"
+    )
+
+
 if not SMOKE:
+    @mcp.tool()
+    def create_and_render_video(
+        title: str,
+        narration: str,
+        scenes: list[SceneInstruction],
+        style: Literal["cutout", "duotone"] = "duotone",
+        duration_seconds: int = 30,
+        campaign_id: str = "",
+        youtube_title: str = "",
+        youtube_description: str = "",
+    ) -> dict:
+        """Create and queue a real MP4 from ChatGPT-authored narration and 2–12 scenes.
+
+        ChatGPT MUST write the spoken script, exact on-screen text, scene order,
+        layout and accent. Studio renders the MP4 and persists the YouTube title
+        and description. DOES NOT upload or publish the video. Needs Studio OAuth.
+        """
+        uid = user_id()
+        with Session() as db:
+            video = create_chatgpt_video(
+                db, uid, title, narration,
+                [scene.model_dump() for scene in scenes],
+                style=style, duration_seconds=duration_seconds,
+                campaign_id=campaign_id or None,
+                youtube_title=youtube_title,
+                youtube_description=youtube_description,
+            )
+            return {
+                "video_id": video.id,
+                "status": "queued",
+                "rendered": False,
+                "published": False,
+                "source": "chatgpt_scene_plan",
+                "message": "Studio has the exact script and scenes. Call get_video_generation_status to check the render.",
+            }
+
+    @mcp.tool()
+    def get_video_generation_status(video_id: str) -> dict:
+        """Check YOUR video's render job, return a temporary playable MP4 URL when ready."""
+        with Session() as db:
+            video = db.query(Video).filter_by(id=video_id, user_id=user_id()).first()
+            if not video:
+                raise ValueError("Video not found in your Studio account")
+            job = db.query(VideoJob).filter_by(video_id=video.id).order_by(VideoJob.created.desc()).first()
+            asset = db.get(VideoAsset, video.id)
+            preview = create_preview_link(video) if asset else None
+            return {
+                "video_id": video.id,
+                "title": video.title,
+                "status": video.status,
+                "job_status": job.status if job else None,
+                "render_error": job.error if job and job.status == "failed" else None,
+                "mp4_ready": asset is not None,
+                "preview_url": preview,
+                "preview_expires_in_seconds": 900 if preview else None,
+                "published_url": video.post_url,
+                "studio_dashboard": BASE + "/",
+                "note": "A preview link is temporary. Uploading requires YouTube authorization and an approved video.",
+            }
+
     @mcp.tool()
     def list_campaigns()->list[dict]:
         """List your Studio campaigns, target audiences and video schedules."""
@@ -98,15 +174,17 @@ if not SMOKE:
                     .order_by(Video.created.desc()).limit(100)]
 
     @mcp.tool()
-    def create_video_draft(title:str,script:str="",style:str="cutout",
+    def create_video_draft(title:str,script:str,style:str="cutout",
                            duration_seconds:int=45,topic:str="",audience:str="")->dict:
-        """Create a script and a video draft; this does not render or publish it."""
+        """Legacy: save a ChatGPT-written script without rendering. Prefer create_and_render_video."""
         uid=user_id()
         if style not in ("cutout","duotone") or not 10<=duration_seconds<=90:
             raise ValueError("Style must be cutout/duotone and duration 10–90 seconds")
+        if not script.strip():
+            raise ValueError("ChatGPT must supply the entire narration")
         with Session() as db:
             v=Video(user_id=uid,title=title[:160],
-                    script=script or draft_script(title,audience,topic),
+                    script=script.strip(),
                     style=style,length=duration_seconds,channels='["youtube"]',
                     status="draft")
             db.add(v);db.commit()
@@ -164,16 +242,20 @@ if not SMOKE:
             return {"video_id":v.id,"status":"queued_for_youtube","scheduled_for":str(when) if when else None}
 
     @mcp.tool()
-    def run_campaign_now(campaign_id:str)->dict:
-        """Generate one video draft for a campaign now. Publishing follows campaign approval mode."""
+    def run_campaign_now(campaign_id:str, narration:str, scenes:list[SceneInstruction],
+                         title:str="",youtube_description:str="")->dict:
+        """Run a campaign using a narration and scenes created by ChatGPT in this conversation."""
+        uid = user_id()
         with Session() as db:
-            c=db.query(Campaign).filter_by(id=campaign_id,user_id=user_id()).first()
+            c=db.query(Campaign).filter_by(id=campaign_id,user_id=uid).first()
             if not c:raise ValueError("Campaign not found")
-            v=Video(user_id=c.user_id,campaign_id=c.id,title=(c.topic or c.name)[:100],
-                    script=draft_script(c.name,c.audience,c.topic),
-                    style=c.style,length=c.length,channels=c.channels,status="queued")
-            db.add(v);db.flush();queue_video(db,v.id,"render");db.commit()
-            return {"video_id":v.id,"status":"queued"}
+            v=create_chatgpt_video(
+                db, uid, title or c.name, narration,
+                [scene.model_dump() for scene in scenes],
+                style=c.style, duration_seconds=c.length,
+                campaign_id=c.id, youtube_description=youtube_description,
+            )
+            return {"video_id":v.id,"status":"queued","published":False}
 
 
 if not SMOKE:

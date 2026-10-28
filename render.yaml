@@ -24,8 +24,6 @@ services:
         value: https://studio-web-hz4l.onrender.com
       - key: STUDIO_SMOKE_ONLY
         value: "0"
-      - key: STUDIO_SIGNUP_CODE
-        sync: false
       - key: ENCRYPTION_KEY
         sync: false
       - key: YOUTUBE_CLIENT_ID

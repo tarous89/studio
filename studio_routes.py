@@ -9,7 +9,8 @@ from pydantic import BaseModel, Field
 from app import Campaign, Session, Video, auth, now, video_data
 from studio_pipeline import (
     VideoAsset, VideoJob, complete_youtube_connect, draft_script, queue_video,
-    start_youtube_connect, youtube_configured, youtube_connected, MAX_VIDEO_BYTES
+    start_youtube_connect, youtube_configured, youtube_connected, MAX_VIDEO_BYTES,
+    check_preview_signature, get_creative_plan
 )
 
 router = APIRouter(prefix="/api")
@@ -108,6 +109,13 @@ def media(video_id:str,user_id=Depends(auth)):
       "Content-Disposition":f'inline; filename="studio-{video_id}.mp4"'})
 
 
+@router.get("/videos/{video_id}/creative")
+def creative(video_id:str,user_id=Depends(auth)):
+    with Session() as db:
+        owned_video(db,user_id,video_id)
+    return get_creative_plan(video_id) or {"scenes":[]}
+
+
 @router.post("/videos/{video_id}/approve")
 def approve_video(video_id:str,user_id=Depends(auth)):
     with Session() as db:
@@ -154,17 +162,30 @@ def jobs(video_id:str,user_id=Depends(auth)):
 
 @router.post("/campaigns/{campaign_id}/run")
 def run_campaign(campaign_id:str,user_id=Depends(auth)):
+    """A scriptless campaign cannot render: ChatGPT must author the story first."""
     with Session() as db:
         c=db.query(Campaign).filter_by(id=campaign_id,user_id=user_id).first()
         if not c:raise HTTPException(404,"Campaign not found")
-        v=Video(user_id=user_id,campaign_id=c.id,style=c.style,length=c.length,
-                title=c.topic[:100] or c.name,script=draft_script(c.name,c.audience,c.topic),
-                channels=c.channels,status="queued")
-        db.add(v);db.flush()
-        queue_video(db,v.id,"render")
-        db.commit()
-        return {"id":v.id,"status":"queued"}
+    raise HTTPException(409,"Create this campaign video in ChatGPT using the Studio plugin. ChatGPT supplies the narration and scenes to run_campaign_now.")
 
 
 def mount(app):
     app.include_router(router)
+
+    @app.get("/preview/{video_id}")
+    def temporary_mp4_preview(video_id: str, e: int, s: str):
+        """Only people holding an unexpired signed read-only link may fetch this MP4."""
+        with Session() as db:
+            video = db.get(Video, video_id)
+            if not video or not check_preview_signature(video, e, s):
+                raise HTTPException(404, "Preview unavailable or expired")
+            asset = db.get(VideoAsset, video_id)
+            if not asset:
+                raise HTTPException(404, "The MP4 is still rendering")
+            content = asset.data
+        return Response(content, media_type="video/mp4", headers={
+            "Cache-Control": "private, no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": f'inline; filename="studio-{video_id}.mp4"',
+        })

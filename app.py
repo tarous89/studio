@@ -71,7 +71,7 @@ async def stage_guard(request: Request, call_next):
     return await call_next(request)
 
 @app.get('/health')
-def health():return {'status':'ok'}
+def health():return {'status':'ok','storage':'postgres' if not engine.url.get_backend_name().startswith('sqlite') else 'temporary_sqlite','renderer':'available'}
 def hash_pw(s):
  salt=secrets.token_bytes(16)
  return base64.urlsafe_b64encode(salt+hashlib.scrypt(s.encode(),salt=salt,n=16384,r=8,p=1)).decode()
@@ -90,7 +90,6 @@ def auth(request:Request):
 class Login(BaseModel):
  email:str
  password:str
- invite_code:str=''
 class CampaignData(BaseModel):
  name:str=Field(min_length=1)
  topic:str=''
@@ -120,9 +119,6 @@ def sign_in(u,db):
 @app.post('/api/auth/register')
 def register(data:Login):
  if len(data.password)<12:raise HTTPException(400,'Use at least 12 characters')
- invite=os.getenv('STUDIO_SIGNUP_CODE','')
- if not invite or not secrets.compare_digest(data.invite_code,invite):
-  raise HTTPException(403,'Registration requires the private Studio invitation code')
  with Session() as db:
   if db.query(User).filter_by(email=data.email.lower()).first():raise HTTPException(409,'Account exists')
   u=User(email=data.email.lower(),password=hash_pw(data.password))

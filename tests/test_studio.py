@@ -2,7 +2,7 @@ import os
 import subprocess
 from pathlib import Path
 
-os.environ["STUDIO_SMOKE_ONLY"]="1"
+
 
 from fastapi.testclient import TestClient
 from app import app, Video

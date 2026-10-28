@@ -12,8 +12,8 @@ Studio's existing Render resources (Frankfurt; same workspace as Trialy, but sep
 In Render:
 1. Open **studio-db → Connect → Internal** and copy its *internal connection URL* (including credentials). It should point to the Studio database, **not** Trialy's database. Do not share the URL in chat.
 2. Open **studio-web → Environment**, set **DATABASE_URL** to this internal connection URL, save and deploy. The application converts standard `postgresql://` URL prefixes to SQLAlchemy's Psycopg driver and creates the necessary tables.
-3. Confirm **PUBLIC_BASE_URL** is `https://studio-web-hz4l.onrender.com`, **STUDIO_SMOKE_ONLY** is `0`, and **ENCRYPTION_KEY** and **STUDIO_SIGNUP_CODE** are already configured. Do not change encryption keys after connecting YouTube unless encrypted credentials have been migrated.
-4. Open `https://studio-web-hz4l.onrender.com/health` and verify `{"status":"ok"}`. Create your Studio account from the application using the private `STUDIO_SIGNUP_CODE` configured in the Render Environment page. If that code is hidden, set a new code of your choice in Render and use it at registration.
+3. Confirm **PUBLIC_BASE_URL** is `https://studio-web-hz4l.onrender.com`, **STUDIO_SMOKE_ONLY** is `0`, and **ENCRYPTION_KEY** is already configured. Do not change encryption keys after connecting YouTube unless encrypted credentials have been migrated.
+4. Open `https://studio-web-hz4l.onrender.com/health` and verify `{"status":"ok"}`. Create your Studio account with an email and password; no invitation code is needed.
 
 Do not start storing real videos or Google refresh tokens before `DATABASE_URL` is set. With no database connection, temporary local SQLite data is erased on a web service replacement.
 
@@ -57,3 +57,11 @@ The plugin is intentionally private. Neither saving the plugin nor enabling OAut
 - The OpenAI writer uses `OPENAI_API_KEY` if configured. If unavailable, Studio uses a deterministic template and **does not** invent company-specific facts.
 - YouTube upload logic follows the official resumable upload API but cannot be verified end-to-end until your Google credentials and channel consent are configured.
 - The dashboard and API are currently invitation-only and suitable for testing, not yet an audited multi-tenant commercial launch.
+
+## ChatGPT-first rendering (Studio plugin v0.2.0)
+
+The fastest path is to install the private Studio plugin, create a Studio account with email/password (no invite), and authorize the plugin using Studio OAuth. Ask ChatGPT for a specific B2B video. ChatGPT will write the narration, on-screen scenes, layout/accent preferences and YouTube metadata, then call `create_and_render_video` to queue Studio's MP4 renderer. `get_video_generation_status` returns an expiring preview link after completion. The signed MP4 preview expires after 15 minutes but can be refreshed from the plugin or opened in Studio.
+
+YouTube account authorization is **not required** for generation or preview. Upload/scheduling still requires Google OAuth and an explicitly approved video. Studio does not independently generate its own weekly scripts: cadence is a campaign preference, not a scheduled ChatGPT invocation. Do not mistake a queued render or upload for a completed publication.
+
+The public health check `/health` reports `storage: postgres` when the service is using its separate Render PostgreSQL database. If it says `temporary_sqlite`, data and MP4s may be lost on redeployment; set the Studio web service's `DATABASE_URL` from the existing Studio database's internal connection string (never share it in chat).
