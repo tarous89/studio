@@ -420,7 +420,7 @@ def one_job():
         elif kind=="youtube_publish":
             with Session() as db:
                 v=db.get(Video,video_id)
-                if not v or v.status not in ("approved","scheduled","publishing"):
+                if not v or v.status not in ("approved","queued_for_upload","publishing"):
                     raise RuntimeError("Video is not approved for publication")
                 data=db.get(VideoAsset,video_id)
                 if data is None:
