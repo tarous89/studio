@@ -95,7 +95,7 @@ def decrypted(value):
 
 
 def youtube_configured():
-    return bool(os.getenv("YOUTUBE_CLIENT_ID") and os.getenv("YOUTUBE_CLIENT_SECRET") and os.getenv("ENCRYPTION_KEY"))
+    return bool(os.getenv("DATABASE_URL") and os.getenv("YOUTUBE_CLIENT_ID") and os.getenv("YOUTUBE_CLIENT_SECRET") and os.getenv("ENCRYPTION_KEY"))
 
 
 def youtube_connected(db, user_id):
