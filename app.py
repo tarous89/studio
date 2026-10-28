@@ -90,12 +90,13 @@ def auth(request:Request):
 class Login(BaseModel):
  email:str
  password:str
+ invite_code:str=''
 class CampaignData(BaseModel):
  name:str=Field(min_length=1)
  topic:str=''
  audience:str=''
  style:str='cutout'
- channels:list[str]=['linkedin']
+ channels:list[str]=['youtube']
  length:int=45
  frequency:str='weekly'
  mode:str='review'
@@ -106,7 +107,7 @@ class VideoData(BaseModel):
  style:str='cutout'
  length:int=45
  campaign_id:str|None=None
- channels:list[str]=[]
+ channels:list[str]=['youtube']
 class ScheduleData(BaseModel):
  scheduled_for:datetime
 class PostizData(BaseModel):
@@ -119,6 +120,9 @@ def sign_in(u,db):
 @app.post('/api/auth/register')
 def register(data:Login):
  if len(data.password)<12:raise HTTPException(400,'Use at least 12 characters')
+ invite=os.getenv('STUDIO_SIGNUP_CODE','')
+ if not invite or not secrets.compare_digest(data.invite_code,invite):
+  raise HTTPException(403,'Registration requires the private Studio invitation code')
  with Session() as db:
   if db.query(User).filter_by(email=data.email.lower()).first():raise HTTPException(409,'Account exists')
   u=User(email=data.email.lower(),password=hash_pw(data.password))
@@ -141,6 +145,10 @@ def campaigns(id=Depends(auth)):
 @app.post('/api/campaigns')
 def create_campaign(data:CampaignData,id=Depends(auth)):
  with Session() as db:
+  if data.style not in ('cutout','duotone') or not 10<=data.length<=90:raise HTTPException(400,'Invalid video format')
+  if data.mode=='auto':
+   from studio_pipeline import youtube_connected
+   if not youtube_connected(db,id):raise HTTPException(422,'Connect YouTube before enabling automatic publishing')
   c=Campaign(user_id=id,**data.model_dump(exclude={'channels'}),channels=json.dumps(data.channels))
   db.add(c);db.commit();return campaign_data(c)
 @app.put('/api/campaigns/{cid}')
@@ -148,6 +156,10 @@ def edit_campaign(cid:str,data:CampaignData,id=Depends(auth)):
  with Session() as db:
   c=db.query(Campaign).filter_by(id=cid,user_id=id).first()
   if not c:raise HTTPException(404)
+  if data.style not in ('cutout','duotone') or not 10<=data.length<=90:raise HTTPException(400,'Invalid video format')
+  if data.mode=='auto':
+   from studio_pipeline import youtube_connected
+   if not youtube_connected(db,id):raise HTTPException(422,'Connect YouTube before enabling automatic publishing')
   for k,v in data.model_dump().items():setattr(c,k,json.dumps(v) if k=='channels' else v)
   db.commit();return campaign_data(c)
 @app.get('/api/videos')
@@ -157,6 +169,7 @@ def videos(id=Depends(auth)):
 def create_video(data:VideoData,id=Depends(auth)):
  with Session() as db:
   if data.campaign_id and not db.query(Campaign).filter_by(user_id=id,id=data.campaign_id).first():raise HTTPException(404,'Campaign not found')
+  if data.style not in ('cutout','duotone') or not 10<=data.length<=90:raise HTTPException(400,'Invalid video format')
   v=Video(user_id=id,**data.model_dump(exclude={'channels'}),channels=json.dumps(data.channels))
   db.add(v);db.commit();return video_data(v)
 @app.post('/api/videos/{vid}/schedule')
@@ -165,7 +178,10 @@ def schedule(vid:str,data:ScheduleData,id=Depends(auth)):
   v=db.query(Video).filter_by(user_id=id,id=vid).first()
   if not v:raise HTTPException(404)
   if data.scheduled_for.tzinfo is None or data.scheduled_for.astimezone(timezone.utc)<=now():raise HTTPException(400,'Future time with timezone required')
-  v.scheduled_for=data.scheduled_for;v.status='scheduled';db.commit();return video_data(v)
+  from studio_pipeline import VideoAsset,queue_video,youtube_connected
+  if v.status!='approved' or not db.get(VideoAsset,v.id):raise HTTPException(409,'Approve a rendered MP4 first')
+  if not youtube_connected(db,id):raise HTTPException(422,'Connect YouTube before scheduling')
+  v.scheduled_for=data.scheduled_for;v.status='scheduled';queue_video(db,v.id,'youtube_publish');db.commit();return video_data(v)
 @app.get('/api/stats')
 def stats(id=Depends(auth)):
  with Session() as db:
