@@ -1,7 +1,9 @@
+# Studio is already deployed as a separate Render service.
+# This Blueprint is intended for attaching an isolated PostgreSQL connection
+# and managing the SAME existing studio-web / studio-db resources.
 databases:
   - name: studio-db
     databaseName: studio
-    user: studio
     region: frankfurt
     plan: basic-256mb
 services:
@@ -11,16 +13,23 @@ services:
     region: frankfurt
     plan: starter
     healthCheckPath: /health
+    autoDeployTrigger: commit
     envVars:
       - key: DATABASE_URL
         fromDatabase:
           name: studio-db
           property: connectionString
-      - key: SESSION_SECRET
-        generateValue: true
+      - key: PUBLIC_BASE_URL
+        value: https://studio-web-hz4l.onrender.com
+      - key: STUDIO_SMOKE_ONLY
+        value: "0"
+      - key: STUDIO_SIGNUP_CODE
+        sync: false
       - key: ENCRYPTION_KEY
         sync: false
-      - key: POSTIZ_URL
+      - key: YOUTUBE_CLIENT_ID
         sync: false
-      - key: POSTIZ_API_KEY
+      - key: YOUTUBE_CLIENT_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
         sync: false
