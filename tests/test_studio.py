@@ -10,11 +10,13 @@ from studio_pipeline import render_video
 
 
 def test_health_and_public_guard():
-    with TestClient(app) as client:
-        response=client.get("/health")
-        assert response.status_code==200
-        assert response.json()["status"]=="ok"
-        assert client.get("/api/videos").status_code in (401,403)
+    # A second FastMCP lifespan cannot start in the same pytest interpreter.
+    # Health checks do not need to start another MCP session.
+    client=TestClient(app)
+    response=client.get("/health")
+    assert response.status_code==200
+    assert response.json()["status"]=="ok"
+    assert client.get("/api/videos").status_code in (401,403)
 
 
 def test_mp4_rendering(tmp_path):
