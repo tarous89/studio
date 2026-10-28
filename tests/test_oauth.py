@@ -48,3 +48,74 @@ def test_oauth_metadata_and_auth_wall():
         },follow_redirects=False)
         assert auth.status_code in (302,303,307),auth.text
         assert "/mcp/consent" in auth.headers["location"]
+
+        # Complete the Studio OAuth consent and token exchange, not just discovery.
+        signup=client.post("/api/auth/register",json={
+            "email":"oauth-chatgpt-ci@example.invalid",
+            "password":"studio-auth-test-password-2026"
+        })
+        assert signup.status_code==200,signup.text
+        from urllib.parse import urlparse,parse_qs
+        request_url=urlparse(auth.headers["location"])
+        request_id=parse_qs(request_url.query)["request"][0]
+        consent=client.post("/mcp/consent",data={
+            "request":request_id,
+            "email":"oauth-chatgpt-ci@example.invalid",
+            "password":"studio-auth-test-password-2026",
+        },follow_redirects=False)
+        assert consent.status_code in (302,303,307),consent.text
+        redirect=urlparse(consent.headers["location"])
+        assert redirect.netloc=="chatgpt.com"
+        auth_code=parse_qs(redirect.query)["code"][0]
+        exchange=client.post("/mcp/token",data={
+            "grant_type":"authorization_code",
+            "code":auth_code,
+            "client_id":client_id,
+            "code_verifier":verifier,
+            "redirect_uri":"https://chatgpt.com/connector/callback",
+            "resource":"https://studio-web-hz4l.onrender.com/mcp/",
+        })
+        assert exchange.status_code==200,exchange.text
+        bearer=exchange.json()["access_token"]
+        rpc_headers={
+            "Authorization":"Bearer "+bearer,
+            "Accept":"application/json, text/event-stream",
+            "Content-Type":"application/json"
+        }
+        initialized=client.post("/mcp/",headers=rpc_headers,json={
+            "jsonrpc":"2.0","id":11,"method":"initialize",
+            "params":{"protocolVersion":"2025-06-18",
+                      "capabilities":{},
+                      "clientInfo":{"name":"ChatGPT CI","version":"0.2"}}
+        })
+        assert initialized.status_code==200,initialized.text
+        tools_list=client.post("/mcp/",headers=rpc_headers,json={
+            "jsonrpc":"2.0","id":12,"method":"tools/list","params":{}
+        })
+        assert tools_list.status_code==200,tools_list.text
+        names={tool["name"] for tool in tools_list.json()["result"]["tools"]}
+        assert {"create_and_render_video","get_video_generation_status"}.issubset(names)
+
+        created=client.post("/mcp/",headers=rpc_headers,json={
+            "jsonrpc":"2.0","id":13,"method":"tools/call",
+            "params":{"name":"create_and_render_video","arguments":{
+                "title":"Clinical trial decision framework",
+                "narration":"Start with the key question. Review the evidence. Plan your next decision.",
+                "scenes":[
+                  {"text":"Start with the question","layout":"headline","accent":"lilac"},
+                  {"text":"Review the evidence","layout":"quote","accent":"mint"},
+                  {"text":"Plan the next step","layout":"headline","accent":"coral"}
+                ],
+                "style":"duotone","duration_seconds":15
+            }}
+        })
+        assert created.status_code==200,created.text
+        result=created.json()["result"]
+        assert not result.get("isError"),result
+        import json
+        payload=result.get("structuredContent") or json.loads(result["content"][0]["text"])
+        video_id=payload["video_id"]
+        assert payload["status"]=="queued"
+        from studio_pipeline import get_creative_plan
+        plan=get_creative_plan(video_id)
+        assert plan and plan["scenes"][1]["text"]=="Review the evidence"
